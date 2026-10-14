@@ -1,7 +1,17 @@
-import { useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import {
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
 
-import { ApplicantShell } from '../../components/layout/ApplicantShell'
+import {
+  useNavigate,
+} from 'react-router-dom'
+
+import {
+  ApplicantShell,
+} from '../../components/layout/ApplicantShell'
+
 import {
   Card,
   Button,
@@ -10,8 +20,21 @@ import {
   Modal,
 } from '../../components/ui'
 
-import { jeeMainForm } from '../../lib/mockData'
-import { useApp } from '../../lib/store'
+import {
+  jeeMainForm,
+} from '../../lib/mockData'
+
+import {
+  useApp,
+} from '../../lib/store'
+
+import {
+  apiRequest,
+} from '../../lib/api/client'
+
+// ======================================================
+// STEPS
+// ======================================================
 
 const STEPS = [
   'Documents',
@@ -22,78 +45,574 @@ const STEPS = [
   'Submitted',
 ]
 
+// ======================================================
+// STATUS LABELS
+// ======================================================
+
 const STATUS_LABEL = {
   idle: 'Available in Vault',
-  not_uploaded: 'Not uploaded',
-  uploading: 'Uploading…',
-  processing: 'Processing…',
-  extracting: 'Extracting details…',
-  validating: 'Validating…',
-  ready: 'Ready',
+
+  not_uploaded:
+    'Not uploaded',
+
+  uploading:
+    'Uploading…',
+
+  processing:
+    'Processing…',
+
+  extracting:
+    'Extracting details…',
+
+  validating:
+    'Validating…',
+
+  ready:
+    'Ready',
 }
 
+// ======================================================
+// STATUS DOT
+// ======================================================
+
+function StatusDot({
+  status,
+}) {
+  const className =
+    status === 'ready'
+      ? 'bg-emerald-500'
+      : status === 'uploading' ||
+          status === 'processing' ||
+          status === 'extracting' ||
+          status === 'validating'
+        ? 'bg-blue-500'
+        : 'bg-slate-300'
+
+  return (
+    <span
+      className={`inline-block w-2 h-2 rounded-full ${className}`}
+    />
+  )
+}
+
+// ======================================================
+// DOCUMENT TYPE HELPER
+// ======================================================
+
+function getDocumentType(
+  doc
+) {
+  const map = {
+    aadhaar:
+      'aadhaar',
+
+    photo:
+      'photograph',
+
+    photograph:
+      'photograph',
+
+    signature:
+      'signature',
+
+    marksheet:
+      '10th_marksheet',
+
+    '10th_marksheet':
+      '10th_marksheet',
+
+    marksheet_10:
+      '10th_marksheet',
+
+    '12th_marksheet':
+      '12th_marksheet',
+
+    marksheet_12:
+      '12th_marksheet',
+
+    caste_certificate:
+      'caste_certificate',
+  }
+
+  return (
+    map[doc.key] ||
+    doc.documentType ||
+    doc.key
+  )
+}
+
+// ======================================================
+// COMPONENT
+// ======================================================
+
 export default function DocumentRequirements() {
-  const navigate = useNavigate()
+  const navigate =
+    useNavigate()
 
   const {
+    user,
+
     docState,
+
     grantPermission,
+
     uploadDocument,
+
+    jeeApplication,
+
+    applicationLoading,
+
+    ensureJeeApplication,
+
+    documentError,
+
+    setDocumentError,
   } = useApp()
 
-  const fileInputRef = useRef(null)
+  // ====================================================
+  // FILE INPUT
+  // ====================================================
 
-  const [permissionDoc, setPermissionDoc] =
-    useState(null)
+  const fileInputRef =
+    useRef(null)
 
-  const [previewDoc, setPreviewDoc] =
-    useState(null)
+  const [
+    uploadingDocKey,
+    setUploadingDocKey,
+  ] = useState(null)
 
-  const [uploadingDocKey, setUploadingDocKey] =
-    useState(null)
+  // ====================================================
+  // VAULT PERMISSION MODAL
+  // ====================================================
 
-  /*
-  |--------------------------------------------------------------------------
-  | Direct upload
-  |--------------------------------------------------------------------------
-  */
+  const [
+    permissionDoc,
+    setPermissionDoc,
+  ] = useState(null)
 
-  const handleUploadClick = (docKey) => {
-    setUploadingDocKey(docKey)
+  // ====================================================
+  // PREVIEW
+  // ====================================================
+
+  const [
+    previewDoc,
+    setPreviewDoc,
+  ] = useState(null)
+
+  const [
+    previewUrl,
+    setPreviewUrl,
+  ] = useState('')
+
+  const [
+    previewLoading,
+    setPreviewLoading,
+  ] = useState(false)
+
+  // ====================================================
+  // PAGE ERROR
+  // ====================================================
+
+  const [
+    pageError,
+    setPageError,
+  ] = useState('')
+
+  // ====================================================
+  // LOAD / CREATE JEE APPLICATION
+  // ====================================================
+
+  useEffect(() => {
+    if (!user) {
+      return
+    }
+
+    let cancelled =
+      false
+
+    async function loadApplication() {
+      try {
+        setPageError('')
+
+        setDocumentError('')
+
+        await ensureJeeApplication(
+          user
+        )
+      } catch (error) {
+        console.error(
+          'Failed to load JEE application:',
+          error
+        )
+
+        if (!cancelled) {
+          setPageError(
+            error?.message ||
+              'Unable to load your JEE Main application.'
+          )
+        }
+      }
+    }
+
+    loadApplication()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    user,
+    ensureJeeApplication,
+    setDocumentError,
+  ])
+
+  // ====================================================
+  // REQUIRED DOCUMENTS
+  //
+  // Caste certificate is optional and must not block
+  // the Next button.
+  // ====================================================
+
+  const requiredDocuments =
+    jeeMainForm.documents.filter(
+      (document) => {
+        if (
+          document.key ===
+          'caste_certificate'
+        ) {
+          return false
+        }
+
+        if (
+          document.required ===
+          false
+        ) {
+          return false
+        }
+
+        return true
+      }
+    )
+
+  // ====================================================
+  // ALL REQUIRED DOCUMENTS READY?
+  // ====================================================
+
+  const allReady =
+    requiredDocuments.every(
+      (document) =>
+        docState[
+          document.key
+        ]?.status === 'ready'
+    )
+
+  // ====================================================
+  // FILE UPLOAD BUTTON
+  // ====================================================
+
+  function handleUploadClick(
+    docKey
+  ) {
+    setDocumentError('')
+
+    setUploadingDocKey(
+      docKey
+    )
 
     fileInputRef.current?.click()
   }
 
-  const handleFileSelect = (event) => {
-    const file = event.target.files?.[0]
+  // ====================================================
+  // FILE SELECTED
+  // ====================================================
 
-    if (!file || !uploadingDocKey) {
+  async function handleFileSelect(
+    event
+  ) {
+    const file =
+      event.target.files?.[0]
+
+    if (
+      !file ||
+      !uploadingDocKey
+    ) {
       return
     }
 
-    uploadDocument(uploadingDocKey, file)
+    // --------------------------------------------
+    // Basic file validation
+    // --------------------------------------------
 
-    setUploadingDocKey(null)
+    const allowedTypes = [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'application/pdf',
+    ]
 
-    // Allows selecting the same file again later
-    event.target.value = ''
+    if (
+      !allowedTypes.includes(
+        file.type
+      )
+    ) {
+      setDocumentError(
+        'Only JPG, PNG, WEBP and PDF files are allowed.'
+      )
+
+      event.target.value =
+        ''
+
+      setUploadingDocKey(null)
+
+      return
+    }
+
+    // --------------------------------------------
+    // 10 MB limit
+    // --------------------------------------------
+
+    const maxSize =
+      10 * 1024 * 1024
+
+    if (
+      file.size >
+      maxSize
+    ) {
+      setDocumentError(
+        'File size must be less than 10 MB.'
+      )
+
+      event.target.value =
+        ''
+
+      setUploadingDocKey(null)
+
+      return
+    }
+
+    try {
+      await uploadDocument(
+        uploadingDocKey,
+        file
+      )
+    } catch (error) {
+      console.error(
+        'File upload error:',
+        error
+      )
+    } finally {
+      setUploadingDocKey(
+        null
+      )
+
+      // Allows same file to be selected again.
+      event.target.value =
+        ''
+    }
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Required documents
-  |--------------------------------------------------------------------------
-  */
+  // ====================================================
+  // PREVIEW DOCUMENT
+  // ====================================================
 
-  const requiredDocuments =
-    jeeMainForm.documents.filter(
-      (document) => document.required
+  async function handlePreviewDocument(
+    doc
+  ) {
+    setPreviewDoc(doc)
+
+    setPreviewUrl('')
+
+    setPreviewLoading(
+      true
     )
 
-  const allReady = requiredDocuments.every(
-    (document) =>
-      docState[document.key]?.status === 'ready'
-  )
+    setPageError('')
+
+    setDocumentError('')
+
+    try {
+      const state =
+        docState[
+          doc.key
+        ]
+
+      if (!state) {
+        throw new Error(
+          'Document state was not found.'
+        )
+      }
+
+      // ==================================================
+      // LOCAL UPLOAD PREVIEW
+      // ==================================================
+
+      if (
+        state.source ===
+          'upload' &&
+        state.previewUrl
+      ) {
+        setPreviewUrl(
+          state.previewUrl
+        )
+
+        return
+      }
+
+      // ==================================================
+      // VAULT DOCUMENT PREVIEW
+      // ==================================================
+
+      const documentId =
+        state.documentId
+
+      if (!documentId) {
+        throw new Error(
+          'Document could not be found.'
+        )
+      }
+
+      const data =
+        await apiRequest(
+          `/api/documents/${documentId}/url`,
+          {
+            headers: {
+              Authorization:
+                `Bearer ${localStorage.getItem(
+                  'formfiller_access_token'
+                )}`,
+            },
+          }
+        )
+
+      if (
+        !data?.url
+      ) {
+        throw new Error(
+          'Unable to generate secure document URL.'
+        )
+      }
+
+      setPreviewUrl(
+        data.url
+      )
+    } catch (error) {
+      console.error(
+        'Document preview error:',
+        error
+      )
+
+      setDocumentError(
+        error?.message ||
+          'Unable to preview this document.'
+      )
+    } finally {
+      setPreviewLoading(
+        false
+      )
+    }
+  }
+
+  // ====================================================
+  // CLOSE PREVIEW
+  // ====================================================
+
+  function closePreview() {
+    setPreviewDoc(null)
+
+    setPreviewUrl('')
+
+    setPreviewLoading(
+      false
+    )
+  }
+
+  // ====================================================
+  // NEXT
+  // ====================================================
+
+  async function handleNext() {
+    if (
+      !jeeApplication
+    ) {
+      setPageError(
+        'Your application is still loading. Please wait a moment.'
+      )
+
+      return
+    }
+
+    if (
+      !allReady
+    ) {
+      setPageError(
+        'Please complete all required documents before continuing.'
+      )
+
+      return
+    }
+
+    setPageError('')
+
+    try {
+      // Move application to step 2.
+      //
+      // If backend supports currentStep,
+      // store.jsx will update it.
+      //
+      // We intentionally do not block navigation
+      // if only the step-update API is unavailable.
+
+      const updateStep =
+        window.__FORMFILLER_UPDATE_STEP__
+
+      if (
+        typeof updateStep ===
+        'function'
+      ) {
+        await updateStep(2)
+      }
+    } catch (error) {
+      console.warn(
+        'Application step update warning:',
+        error
+      )
+    }
+
+    navigate(
+      '/forms/jee-main/application'
+    )
+  }
+
+  // ====================================================
+  // NOT LOGGED IN
+  // ====================================================
+
+  if (!user) {
+    return (
+      <ApplicantShell
+        title="JEE Main"
+        subtitle="Step 1 of 6 · Documents"
+      >
+        <div className="max-w-content">
+          <Card>
+            <div className="py-10 text-center">
+              <h2 className="font-display text-xl font-bold text-ink">
+                Login required
+              </h2>
+
+              <p className="text-sm text-ink-faint mt-2">
+                Please login before uploading or
+                accessing your documents.
+              </p>
+            </div>
+          </Card>
+        </div>
+      </ApplicantShell>
+    )
+  }
+
+  // ====================================================
+  // RENDER
+  // ====================================================
 
   return (
     <ApplicantShell
@@ -101,10 +620,19 @@ export default function DocumentRequirements() {
       subtitle="Step 1 of 6 · Documents"
     >
       <div className="max-w-content">
+
+        {/* ==========================================
+            PROGRESS
+        ========================================== */}
+
         <ProgressSteps
           steps={STEPS}
           current={0}
         />
+
+        {/* ==========================================
+            HEADER
+        ========================================== */}
 
         <div className="mt-8 mb-6">
           <h2 className="font-display text-2xl font-bold text-ink">
@@ -112,153 +640,264 @@ export default function DocumentRequirements() {
           </h2>
 
           <p className="text-ink-faint text-sm mt-1">
-            Nothing is used until you explicitly allow it
-            below.
+            Upload your documents or allow FormFiller
+            to use documents already stored in your Vault.
           </p>
         </div>
 
-        {/* Hidden file input */}
+        {/* ==========================================
+            APPLICATION LOADING
+        ========================================== */}
+
+        {applicationLoading && (
+          <div className="mb-5 rounded-lg border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-700">
+            Preparing your JEE Main application…
+          </div>
+        )}
+
+        {/* ==========================================
+            APPLICATION READY
+        ========================================== */}
+
+        {!applicationLoading &&
+          jeeApplication && (
+            <div className="mb-6 rounded-xl border border-line bg-surface px-5 py-4">
+
+              <div className="flex items-center justify-between gap-4">
+
+                <div>
+                  <p className="text-xs text-ink-faint">
+                    Application ID
+                  </p>
+
+                  <p className="text-sm font-medium text-ink mt-1 break-all">
+                    {jeeApplication.id}
+                  </p>
+                </div>
+
+                <Badge tone="blue">
+                  {jeeApplication.status ||
+                    'draft'}
+                </Badge>
+
+              </div>
+
+            </div>
+          )}
+
+        {/* ==========================================
+            ERROR
+        ========================================== */}
+
+        {(pageError ||
+          documentError) && (
+          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+
+            <p className="text-sm font-medium text-red-700">
+              {pageError ||
+                documentError}
+            </p>
+
+          </div>
+        )}
+
+        {/* ==========================================
+            HIDDEN FILE INPUT
+        ========================================== */}
 
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*,.pdf"
+          accept="image/jpeg,image/png,image/webp,application/pdf"
           className="hidden"
-          onChange={handleFileSelect}
+          onChange={
+            handleFileSelect
+          }
         />
 
-        <div className="space-y-3">
-          {jeeMainForm.documents.map((doc) => {
-            const state = docState[doc.key]
+        {/* ==========================================
+            DOCUMENT CARDS
+        ========================================== */}
 
-            if (!state) {
-              return null
-            }
+        <div className="space-y-4">
 
-            return (
-              <Card
-                key={doc.key}
-                className="p-5"
-              >
-                <div className="flex items-center justify-between gap-6">
-                  {/* Document information */}
+          {jeeMainForm.documents.map(
+            (doc) => {
+              const state =
+                docState[
+                  doc.key
+                ] || {
+                  permission:
+                    false,
 
-                  <div className="flex items-start gap-3.5 min-w-0">
-                    <div className="w-10 h-10 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
-                      <svg
-                        className="w-4.5 h-4.5 text-brand-500"
-                        viewBox="0 0 16 16"
-                        fill="none"
-                      >
-                        <path
-                          d="M4 2h6l3 3v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z"
-                          stroke="currentColor"
-                          strokeWidth="1.3"
-                          strokeLinejoin="round"
-                        />
+                  status:
+                    'not_uploaded',
 
-                        <path
-                          d="M10 2v3h3"
-                          stroke="currentColor"
-                          strokeWidth="1.3"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </div>
+                  file:
+                    null,
 
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-sm font-medium text-ink">
-                          {doc.label}
-                        </p>
+                  previewUrl:
+                    null,
 
-                        {doc.required ? (
-                          <span className="text-[10px] font-medium text-danger">
-                            Required
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-medium text-ink-faint">
-                            Optional
-                          </span>
-                        )}
-                      </div>
+                  source:
+                    null,
+                }
 
-                      <p className="text-xs text-ink-faint mt-1">
-                        {doc.hint}
-                      </p>
+              const isOptional =
+                doc.key ===
+                  'caste_certificate' ||
+                doc.required ===
+                  false
 
-                      {/* Status */}
+              const isReady =
+                state.status ===
+                'ready'
 
-                      {state.permission && (
-                        <p className="text-xs mt-1.5 flex items-center gap-1.5">
-                          <StatusDot
-                            status={state.status}
+              const isImage =
+                state.file?.type?.startsWith(
+                  'image/'
+                ) ||
+                state.mime_type?.startsWith(
+                  'image/'
+                )
+
+              const hasPreview =
+                !!state.previewUrl ||
+                !!state.documentId
+
+              return (
+                <Card
+                  key={
+                    doc.key
+                  }
+                >
+
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
+
+                    {/* ==================================
+                        LEFT
+                    ================================== */}
+
+                    <div className="flex items-start gap-4 min-w-0">
+
+                      <div className="w-11 h-11 rounded-xl bg-brand-50 flex items-center justify-center shrink-0">
+
+                        <svg
+                          className="w-5 h-5 text-brand-500"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                        >
+                          <path
+                            d="M7 3h7l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinejoin="round"
                           />
 
-                          <span className="text-ink-soft">
-                            {STATUS_LABEL[
-                              state.status
-                            ] || 'Processing…'}
-                          </span>
+                          <path
+                            d="M14 3v5h5"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
 
-                          {state.source ===
-                            'vault' &&
-                            state.status ===
-                              'ready' && (
-                              <span className="text-ink-faint">
-                                · From Vault
-                              </span>
-                            )}
+                      </div>
 
-                          {state.source ===
-                            'upload' &&
-                            state.status ===
-                              'ready' && (
-                              <span className="text-ink-faint">
-                                · Uploaded
-                              </span>
-                            )}
+                      <div className="min-w-0">
+
+                        <div className="flex items-center gap-2 flex-wrap">
+
+                          <p className="text-sm font-medium text-ink">
+                            {doc.label}
+                          </p>
+
+                          {isOptional && (
+                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">
+                              Optional
+                            </span>
+                          )}
+
+                        </div>
+
+                        <p className="text-xs text-ink-faint mt-1">
+                          {doc.hint}
                         </p>
-                      )}
+
+                        {state.permission && (
+                          <p className="text-xs mt-2 flex items-center gap-1.5">
+
+                            <StatusDot
+                              status={
+                                state.status
+                              }
+                            />
+
+                            <span className="text-ink-soft">
+                              {
+                                STATUS_LABEL[
+                                  state.status
+                                ] ||
+                                state.status
+                              }
+                            </span>
+
+                          </p>
+                        )}
+
+                        {state.file && (
+                          <p className="text-xs text-ink-faint mt-1 truncate max-w-[320px]">
+                            {state.file.name}
+                          </p>
+                        )}
+
+                      </div>
+
                     </div>
-                  </div>
 
-                  {/* Actions */}
+                    {/* ==================================
+                        RIGHT ACTIONS
+                    ================================== */}
 
-                  <div className="flex items-center gap-3 shrink-0 flex-wrap justify-end">
-                    {/* Preview */}
+                    <div className="flex items-center gap-2 shrink-0 flex-wrap">
 
-                    {state.status === 'ready' && (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() =>
-                          setPreviewDoc(doc)
-                        }
-                      >
-                        Preview
-                      </Button>
-                    )}
+                      {/* PREVIEW */}
 
-                    {/* Vault permission */}
+                      {isReady &&
+                        hasPreview && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              handlePreviewDocument(
+                                doc
+                              )
+                            }
+                          >
+                            Preview
+                          </Button>
+                        )}
 
-                    {!state.permission &&
-                      doc.inVault && (
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() =>
-                            setPermissionDoc(doc)
-                          }
-                        >
-                          Use from Vault
-                        </Button>
-                      )}
+                      {/* USE FROM VAULT */}
 
-                    {/* Direct upload */}
+                      {!state.permission &&
+                        doc.inVault && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              setPermissionDoc(
+                                doc
+                              )
+                            }
+                          >
+                            Use from Vault
+                          </Button>
+                        )}
 
-                    {!state.permission &&
-                      !doc.inVault && (
+                      {/* DIRECT UPLOAD */}
+
+                      {!state.permission && (
                         <Button
                           size="sm"
                           onClick={() =>
@@ -271,54 +910,116 @@ export default function DocumentRequirements() {
                         </Button>
                       )}
 
-                    {/* Ready */}
+                      {/* RE-UPLOAD */}
 
-                    {state.permission &&
-                      state.status === 'ready' && (
+                      {state.permission &&
+                        state.status ===
+                          'ready' && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              handleUploadClick(
+                                doc.key
+                              )
+                            }
+                          >
+                            Replace
+                          </Button>
+                        )}
+
+                      {/* READY */}
+
+                      {isReady && (
                         <Badge tone="green">
                           Ready
                         </Badge>
                       )}
 
-                    {/* Processing */}
+                      {/* PROCESSING */}
 
-                    {state.permission &&
-                      state.status !== 'ready' && (
-                        <Badge tone="blue">
-                          In progress
-                        </Badge>
-                      )}
+                      {state.permission &&
+                        !isReady && (
+                          <Badge tone="blue">
+                            In progress
+                          </Badge>
+                        )}
+
+                    </div>
+
                   </div>
-                </div>
-              </Card>
-            )
-          })}
+
+                </Card>
+              )
+            }
+          )}
+
         </div>
 
-        {/* Next */}
+        {/* ==========================================
+            REQUIRED DOCUMENT INFO
+        ========================================== */}
 
-        <div className="flex justify-end mt-8">
+        <div className="mt-6 rounded-lg border border-line bg-surface-soft px-4 py-3">
+
+          <p className="text-xs text-ink-faint">
+            Required documents must be ready before
+            you can continue.
+          </p>
+
+          <p className="text-xs text-ink-faint mt-1">
+            Optional documents, such as a caste
+            certificate when not applicable, will not
+            block the application.
+          </p>
+
+        </div>
+
+        {/* ==========================================
+            NEXT
+        ========================================== */}
+
+        <div className="flex justify-between items-center mt-8">
+
           <Button
-            size="lg"
-            disabled={!allReady}
+            variant="secondary"
             onClick={() =>
               navigate(
-                '/forms/jee-main/application'
+                '/dashboard'
               )
             }
           >
-            Next
+            Back
           </Button>
+
+          <Button
+            size="lg"
+            disabled={
+              !allReady ||
+              !jeeApplication ||
+              applicationLoading
+            }
+            onClick={
+              handleNext
+            }
+          >
+            Review & Continue
+          </Button>
+
         </div>
 
-        {/* ---------------------------------------------------------------- */}
-        {/* Vault permission modal */}
-        {/* ---------------------------------------------------------------- */}
+        {/* ==========================================
+            VAULT PERMISSION MODAL
+        ========================================== */}
 
         <Modal
-          open={!!permissionDoc}
+          open={
+            !!permissionDoc
+          }
           onClose={() =>
-            setPermissionDoc(null)
+            setPermissionDoc(
+              null
+            )
           }
           title="Allow document access"
           footer={
@@ -326,311 +1027,174 @@ export default function DocumentRequirements() {
               <Button
                 variant="secondary"
                 onClick={() =>
-                  setPermissionDoc(null)
+                  setPermissionDoc(
+                    null
+                  )
                 }
               >
                 Cancel
               </Button>
 
               <Button
-                onClick={() => {
-                  if (!permissionDoc) return
+                onClick={async () => {
+                  if (
+                    !permissionDoc
+                  ) {
+                    return
+                  }
 
-                  grantPermission(
-                    permissionDoc.key
-                  )
+                  const success =
+                    await grantPermission(
+                      permissionDoc.key
+                    )
 
-                  setPermissionDoc(null)
+                  if (
+                    success
+                  ) {
+                    setPermissionDoc(
+                      null
+                    )
+                  }
                 }}
               >
-                Allow
+                Allow & Continue
               </Button>
             </>
           }
         >
-          <p className="text-sm text-ink-soft leading-6">
-            Allow FormFiller to use your{' '}
-            <span className="font-medium text-ink">
-              {permissionDoc?.label}
-            </span>{' '}
-            for this JEE Main application?
-          </p>
+          <div className="space-y-4">
 
-          <p className="text-xs text-ink-faint mt-2">
-            It will only be used for this
-            application.
-          </p>
+            <p className="text-sm text-ink-soft">
+              FormFiller wants permission to use the
+              following document from your Cloud Vault:
+            </p>
+
+            <div className="rounded-lg border border-line bg-surface-soft p-4">
+
+              <p className="text-sm font-medium text-ink">
+                {
+                  permissionDoc?.label
+                }
+              </p>
+
+              <p className="text-xs text-ink-faint mt-1">
+                {
+                  permissionDoc?.hint
+                }
+              </p>
+
+            </div>
+
+            <div className="rounded-lg bg-brand-50 border border-brand-100 p-4">
+
+              <p className="text-xs text-brand-700">
+                <strong>
+                  Your permission matters.
+                </strong>{' '}
+                A document stored in your Vault is not
+                automatically used for this application.
+              </p>
+
+            </div>
+
+          </div>
         </Modal>
 
-        {/* ---------------------------------------------------------------- */}
-        {/* Document preview modal */}
-        {/* ---------------------------------------------------------------- */}
+        {/* ==========================================
+            PREVIEW MODAL
+        ========================================== */}
 
         <Modal
-          open={!!previewDoc}
-          onClose={() =>
-            setPreviewDoc(null)
+          open={
+            !!previewDoc
+          }
+          onClose={
+            closePreview
           }
           title={
-            previewDoc
-              ? `${previewDoc.label} — Preview`
-              : 'Document Preview'
+            previewDoc?.label ||
+            'Document Preview'
           }
-          width="max-w-3xl"
+          footer={
+            <Button
+              variant="secondary"
+              onClick={
+                closePreview
+              }
+            >
+              Close
+            </Button>
+          }
         >
-          <DocumentPreview
-            doc={previewDoc}
-            state={
-              previewDoc
-                ? docState[previewDoc.key]
-                : null
-            }
-          />
+          <div className="min-h-[300px] flex items-center justify-center">
+
+            {previewLoading && (
+              <div className="text-sm text-ink-faint">
+                Loading secure preview…
+              </div>
+            )}
+
+            {!previewLoading &&
+              previewUrl &&
+              (
+                previewDoc?.key ===
+                  'photo' ||
+                previewDoc?.key ===
+                  'photograph' ||
+                docState[
+                  previewDoc?.key
+                ]?.file?.type?.startsWith(
+                  'image/'
+                )
+              ) && (
+                <img
+                  src={
+                    previewUrl
+                  }
+                  alt={
+                    previewDoc?.label ||
+                    'Document preview'
+                  }
+                  className="max-h-[60vh] max-w-full rounded-lg object-contain"
+                />
+              )}
+
+            {!previewLoading &&
+              previewUrl &&
+              !(
+                previewDoc?.key ===
+                  'photo' ||
+                previewDoc?.key ===
+                  'photograph' ||
+                docState[
+                  previewDoc?.key
+                ]?.file?.type?.startsWith(
+                  'image/'
+                )
+              ) && (
+                <iframe
+                  src={
+                    previewUrl
+                  }
+                  title={
+                    previewDoc?.label ||
+                    'PDF preview'
+                  }
+                  className="w-full h-[60vh] rounded-lg border border-line"
+                />
+              )}
+
+            {!previewLoading &&
+              !previewUrl && (
+                <div className="text-sm text-red-500">
+                  Preview unavailable.
+                </div>
+              )}
+
+          </div>
         </Modal>
+
       </div>
     </ApplicantShell>
-  )
-}
-
-/*
-|--------------------------------------------------------------------------
-| Status dot
-|--------------------------------------------------------------------------
-*/
-
-function StatusDot({ status }) {
-  const color =
-    status === 'ready'
-      ? 'bg-success'
-      : status === 'not_uploaded'
-        ? 'bg-ink-faint'
-        : 'bg-brand-500 animate-pulse'
-
-  return (
-    <span
-      className={`w-1.5 h-1.5 rounded-full ${color}`}
-    />
-  )
-}
-
-/*
-|--------------------------------------------------------------------------
-| Document Preview
-|--------------------------------------------------------------------------
-*/
-
-function DocumentPreview({ doc, state }) {
-  if (!doc || !state) {
-    return null
-  }
-
-  const file = state.file
-  const previewUrl = state.previewUrl
-
-  const isPdf =
-    file?.type === 'application/pdf'
-
-  const isImage =
-    file?.type?.startsWith('image/')
-
-  /*
-  |--------------------------------------------------------------------------
-  | Direct uploaded PDF
-  |--------------------------------------------------------------------------
-  */
-
-  if (previewUrl && isPdf) {
-    return (
-      <div>
-        <div className="border border-line rounded-xl overflow-hidden bg-surface">
-          <iframe
-            src={previewUrl}
-            title={doc.label}
-            className="w-full h-[520px]"
-          />
-        </div>
-
-        <PreviewDetails
-          doc={doc}
-          state={state}
-        />
-      </div>
-    )
-  }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Direct uploaded image
-  |--------------------------------------------------------------------------
-  */
-
-  if (previewUrl && isImage) {
-    return (
-      <div>
-        <div className="border border-line rounded-xl overflow-hidden bg-surface p-4">
-          <div className="min-h-[420px] flex items-center justify-center">
-            <img
-              src={previewUrl}
-              alt={doc.label}
-              className="max-w-full max-h-[500px] object-contain rounded-lg"
-            />
-          </div>
-        </div>
-
-        <PreviewDetails
-          doc={doc}
-          state={state}
-        />
-      </div>
-    )
-  }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Vault document
-  |--------------------------------------------------------------------------
-  |
-  | Currently Vault is mock data, so there is no real
-  | file URL available yet.
-  |
-  | Later Supabase Storage URL will be shown here.
-  |--------------------------------------------------------------------------
-  */
-
-  return (
-    <div>
-      <div className="border border-line rounded-xl bg-surface min-h-[420px] flex items-center justify-center p-8">
-        <div className="text-center max-w-sm">
-          <div className="w-16 h-16 rounded-2xl bg-brand-50 text-brand-500 flex items-center justify-center mx-auto">
-            <svg
-              className="w-7 h-7"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
-              <path
-                d="M6 3h8l4 4v14H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinejoin="round"
-              />
-
-              <path
-                d="M14 3v5h5"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinejoin="round"
-              />
-
-              <path
-                d="m8 16 2.2-2.2L12 15.5l2.2-2.5L16 15"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </div>
-
-          <h3 className="font-display text-lg font-semibold text-ink mt-5">
-            Document selected from Vault
-          </h3>
-
-          <p className="text-sm text-ink-faint mt-2 leading-6">
-            {doc.label} has been selected from
-            your FormFiller Document Vault and is
-            ready to be used for this application.
-          </p>
-
-          <div className="mt-5 inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-brand-50 text-brand-600 text-xs font-medium">
-            <span>✓</span>
-            Vault document
-          </div>
-        </div>
-      </div>
-
-      <PreviewDetails
-        doc={doc}
-        state={state}
-      />
-    </div>
-  )
-}
-
-/*
-|--------------------------------------------------------------------------
-| Preview details
-|--------------------------------------------------------------------------
-*/
-
-function PreviewDetails({ doc, state }) {
-  return (
-    <div className="mt-5">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <PreviewInfo
-          label="Document"
-          value={doc.label}
-        />
-
-        <PreviewInfo
-          label="Source"
-          value={
-            state.source === 'vault'
-              ? 'Document Vault'
-              : 'Direct Upload'
-          }
-        />
-
-        <PreviewInfo
-          label="Status"
-          value={
-            STATUS_LABEL[state.status] ||
-            'Ready'
-          }
-        />
-
-        <PreviewInfo
-          label="Type"
-          value={
-            state.file?.type ===
-            'application/pdf'
-              ? 'PDF'
-              : state.file?.type?.startsWith(
-                    'image/'
-                  )
-                ? 'Image'
-                : 'Document'
-          }
-        />
-      </div>
-
-      <div className="mt-4 flex items-center gap-2 text-success text-sm">
-        <span>✓</span>
-
-        <span>
-          Document is ready for JEE Main
-          application
-        </span>
-      </div>
-    </div>
-  )
-}
-
-/*
-|--------------------------------------------------------------------------
-| Preview information box
-|--------------------------------------------------------------------------
-*/
-
-function PreviewInfo({ label, value }) {
-  return (
-    <div className="rounded-lg border border-line bg-surface px-3 py-2.5">
-      <p className="text-[11px] text-ink-faint">
-        {label}
-      </p>
-
-      <p className="text-xs font-medium text-ink mt-1 truncate">
-        {value}
-      </p>
-    </div>
   )
 }
